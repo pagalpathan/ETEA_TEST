@@ -6,6 +6,7 @@ import Landing from './pages/Landing';
 import Auth from './pages/Auth';
 import Dashboard from './pages/Dashboard';
 import Practice from './pages/Practice';
+import AdminPage from './pages/Admin'; // Import the Admin page
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -19,6 +20,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
+          <Route path="/admin" element={<AdminPage />} /> {/* Add Admin route */}
           <Route path="/" element={<Layout />}>
             <Route path="/dashboard" element={
               <ProtectedRoute>
