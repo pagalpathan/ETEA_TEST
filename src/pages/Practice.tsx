@@ -1,30 +1,93 @@
-import React, { useState } from 'react';
-import { BookOpen, CheckCircle, XCircle, Bookmark, ArrowRight, ArrowLeft, RotateCcw, Sparkles } from 'lucide-react';
-import { subjects, sampleQuestions } from '../data/mockData';
+import React, { useState, useEffect } from 'react';
+import { BookOpen, CheckCircle, XCircle, Bookmark, ArrowRight, ArrowLeft, RotateCcw, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
+import { subjects, sampleQuestions as staticSampleQuestions } from '../data/mockData'; // Renamed for clarity
 import { Question, Subject } from '../types';
 import { motion } from 'framer-motion';
 import QuestionGenerator from '../components/QuestionGenerator';
 
+// Helper to transform fetched questions to match existing Question type structure if needed
+// Especially for correctAnswer (string from API vs number index for rendering)
+const transformApiQuestion = (apiQuestion: any): Question => {
+  const correctAnswerIndex = apiQuestion.options.indexOf(apiQuestion.correctAnswer);
+  return {
+    ...apiQuestion,
+    id: apiQuestion.id || String(Math.random()), // Ensure ID exists
+    options: apiQuestion.options || [],
+    correctAnswer: correctAnswerIndex !== -1 ? correctAnswerIndex : 0, // Default to 0 if not found
+    explanation: apiQuestion.explanation || 'No explanation provided.',
+    difficulty: apiQuestion.difficulty || 'medium',
+    topic: apiQuestion.topic || apiQuestion.subject || 'General',
+    subject: apiQuestion.subject, // Make sure subject is passed through
+  };
+};
+
+
 const Practice: React.FC = () => {
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null); // Index of selected option
   const [showExplanation, setShowExplanation] = useState(false);
-  const [answeredQuestions, setAnsweredQuestions] = useState<Set<number>>(new Set());
-  const [bookmarkedQuestions, setBookmarkedQuestions] = useState<Set<string>>(new Set());
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [questionSource, setQuestionSource] = useState<'sample' | 'generated'>('sample');
+  const [answeredQuestions, setAnsweredQuestions] = useState<Set<number>>(new Set()); // Set of question indices
+  const [bookmarkedQuestions, setBookmarkedQuestions] = useState<Set<string>>(new Set()); // Set of question IDs
 
-  const filteredQuestions = selectedSubject 
-    ? (questionSource === 'sample' 
-        ? sampleQuestions.filter(q => q.subject === selectedSubject)
-        : questions.filter(q => q.subject === selectedSubject))
-    : (questionSource === 'sample' ? sampleQuestions : questions);
+  const [dbQuestions, setDbQuestions] = useState<Question[]>([]); // Questions from our DB
+  const [aiGeneratedQuestions, setAiGeneratedQuestions] = useState<Question[]>([]); // Questions from Gemini
 
-  const currentQuestion = filteredQuestions[currentQuestionIndex];
+  const [questionSource, setQuestionSource] = useState<'sample' | 'db' | 'generated'>('sample');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch questions from DB when subject changes and source is 'db'
+  useEffect(() => {
+    if (selectedSubject && questionSource === 'db') {
+      setIsLoading(true);
+      setError(null);
+      fetch(`http://localhost:3001/api/mcqs?subject=${selectedSubject}`)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Failed to fetch questions: ${response.statusText}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          const transformedData = data.map(transformApiQuestion);
+          setDbQuestions(transformedData);
+          setCurrentQuestionIndex(0);
+          setSelectedAnswer(null);
+          setShowExplanation(false);
+          setAnsweredQuestions(new Set());
+        })
+        .catch(err => {
+          console.error("Error fetching DB questions:", err);
+          setError(err.message || 'Could not load questions from database.');
+          setDbQuestions([]); // Clear questions on error
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+    } else if (questionSource !== 'db') {
+      setDbQuestions([]); // Clear DB questions if source is not 'db'
+    }
+  }, [selectedSubject, questionSource]);
+
+
+  const activeQuestionSet = (() => {
+    switch (questionSource) {
+      case 'sample':
+        return staticSampleQuestions.filter(q => !selectedSubject || q.subject === selectedSubject);
+      case 'db':
+        return dbQuestions.filter(q => !selectedSubject || q.subject === selectedSubject); // Already filtered by API, but good practice
+      case 'generated':
+        return aiGeneratedQuestions.filter(q => !selectedSubject || q.subject === selectedSubject);
+      default:
+        return [];
+    }
+  })();
+
+  const currentQuestion = activeQuestionSet[currentQuestionIndex];
 
   const handleQuestionsGenerated = (generatedQuestions: Question[]) => {
-    setQuestions(generatedQuestions);
+    setAiGeneratedQuestions(generatedQuestions.map(transformApiQuestion)); // Also transform AI questions for consistency
     setQuestionSource('generated');
     setCurrentQuestionIndex(0);
     setSelectedAnswer(null);
@@ -238,6 +301,25 @@ const Practice: React.FC = () => {
                 Sample
               </button>
               <button
+                onClick={() => {
+                  setQuestionSource('db');
+                  // Fetch will be triggered by useEffect if selectedSubject is present
+                  if (!selectedSubject) {
+                    setError("Please select a subject first to load questions from the database.");
+                  } else {
+                    // Clear any existing db questions before fetch to show loading correctly
+                    setDbQuestions([]);
+                  }
+                }}
+                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                  questionSource === 'db'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Database
+              </button>
+              <button
                 onClick={() => setQuestionSource('generated')}
                 className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
                   questionSource === 'generated' 
@@ -282,14 +364,35 @@ const Practice: React.FC = () => {
         </div>
       </motion.div>
 
-      {/* AI Question Generator */}
-      <QuestionGenerator 
-        subject={selectedSubject} 
-        onQuestionsGenerated={handleQuestionsGenerated}
-      />
+      {/* AI Question Generator - Only show if not 'db' source or if db is empty and no error */}
+      {(questionSource === 'generated' || questionSource === 'sample' || (questionSource === 'db' && !isLoading && !error && activeQuestionSet.length === 0)) && (
+        <QuestionGenerator
+          subject={selectedSubject}
+          onQuestionsGenerated={handleQuestionsGenerated}
+        />
+      )}
 
-      {/* Question Card */}
-      {currentQuestion ? (
+      {/* Loading and Error Display */}
+      {isLoading && questionSource === 'db' && (
+        <div className="flex justify-center items-center p-8 bg-white rounded-xl shadow-sm">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin mr-3" />
+          <span className="text-lg text-gray-700">Loading Questions...</span>
+        </div>
+      )}
+      {!isLoading && error && questionSource === 'db' && (
+         <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-md shadow-sm my-4" role="alert">
+          <div className="flex items-center">
+            <AlertTriangle className="h-6 w-6 mr-3" />
+            <div>
+              <p className="font-bold">Error Loading Questions</p>
+              <p>{error}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Question Card - Only show if not loading, no error (or error but different source), and question exists */}
+      {!isLoading && currentQuestion ? (
         <motion.div
           key={currentQuestionIndex}
           initial={{ opacity: 0, x: 20 }}

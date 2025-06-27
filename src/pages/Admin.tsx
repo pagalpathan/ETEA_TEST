@@ -39,16 +39,52 @@ const AdminPage: React.FC = () => {
     }
     const newMcq = { question, options: [option1, option2, option3, option4], correctAnswer, subject };
     console.log('Submitting new MCQ:', newMcq);
-    // Here you would typically send this data to a backend API
-    alert('Single MCQ submitted (simulated). Check console.');
-    // Reset form
-    setQuestion('');
-    setOption1('');
-    setOption2('');
-    setOption3('');
-    setOption4('');
-    setCorrectAnswer('');
-    setSubject('');
+    // Basic validation (client-side)
+    if (!question || !option1 || !option2 || !option3 || !option4 || !correctAnswer || !subject) {
+      alert('Please fill all fields for single MCQ upload.');
+      return;
+    }
+    // Ensure correctAnswer is one of the options (client-side check)
+    const optionsArray = [option1, option2, option3, option4];
+    if (!optionsArray.includes(correctAnswer)) {
+        alert('Correct Answer must exactly match one of the provided options.');
+        return;
+    }
+
+    const mcqData = {
+      question,
+      options: optionsArray,
+      correctAnswer,
+      subject
+    };
+
+    fetch('http://localhost:3001/api/mcqs/add-single', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(mcqData),
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.mcq && data.mcq.id) {
+        alert(`MCQ added successfully! ID: ${data.mcq.id}`);
+        // Reset form
+        setQuestion('');
+        setOption1('');
+        setOption2('');
+        setOption3('');
+        setOption4('');
+        setCorrectAnswer('');
+        setSubject('');
+      } else {
+        alert(`Error: ${data.message || 'Failed to add MCQ.'}`);
+      }
+    })
+    .catch(error => {
+      console.error('Error submitting single MCQ:', error);
+      alert('An error occurred while submitting the MCQ. See console for details.');
+    });
   };
 
   const handleBulkMcqSubmit = (e: React.FormEvent) => {
@@ -57,11 +93,84 @@ const AdminPage: React.FC = () => {
       alert('Please select a file for bulk upload.');
       return;
     }
-    console.log('Submitting bulk MCQ file:', bulkFile.name);
-    // Here you would typically parse the file and send data to a backend API
-    alert(`Bulk MCQ file "${bulkFile.name}" submitted (simulated). Check console.`);
-    // Reset form
-    setBulkFile(null);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const fileContent = event.target?.result as string;
+        let mcqsPayload;
+
+        if (bulkFile.name.endsWith('.json')) {
+          mcqsPayload = { mcqs: JSON.parse(fileContent) };
+        } else if (bulkFile.name.endsWith('.csv')) {
+          // Basic CSV parsing (assumes no commas within fields, simple structure)
+          // For robust CSV parsing, a library like PapaParse would be better
+          const lines = fileContent.split(/\r\n|\n/);
+          const headers = lines[0].split(',').map(h => h.trim());
+          const expectedHeaders = ['question', 'option1', 'option2', 'option3', 'option4', 'correctAnswer', 'subject'];
+          // Basic header check - can be made more robust
+          if (headers.length !== expectedHeaders.length || !expectedHeaders.every((h, i) => headers[i] === h)) {
+            alert('CSV headers are incorrect. Expected: question,option1,option2,option3,option4,correctAnswer,subject');
+            return;
+          }
+
+          const mcqsArray = lines.slice(1).filter(line => line.trim() !== '').map(line => {
+            const values = line.split(',');
+            return {
+              question: values[0],
+              options: [values[1], values[2], values[3], values[4]],
+              correctAnswer: values[5],
+              subject: values[6],
+            };
+          });
+          mcqsPayload = { mcqs: mcqsArray };
+        } else {
+          alert('Unsupported file type. Please upload JSON or CSV.');
+          return;
+        }
+
+        const response = await fetch('http://localhost:3001/api/mcqs/add-bulk', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(mcqsPayload),
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          alert(data.message || `Bulk upload processed. Added: ${data.mcqs?.length || data.addedCount || 0}`);
+        } else {
+          let errorMessage = `Error: ${data.message || 'Failed to upload bulk MCQs.'}`;
+          if (data.errors && data.errors.length > 0) {
+            errorMessage += `\nDetails: ${JSON.stringify(data.errors.slice(0, 3))} (first 3 errors shown)`;
+          }
+          alert(errorMessage);
+        }
+
+      } catch (parseError) {
+        console.error('Error processing bulk file:', parseError);
+        alert('Error processing file. Make sure it is valid JSON or CSV. See console for details.');
+      } finally {
+        // Reset form
+        setBulkFile(null);
+        const fileInput = document.getElementById('bulk-mcq-file') as HTMLInputElement;
+        if (fileInput) {
+            fileInput.value = '';
+        }
+      }
+    };
+
+    reader.onerror = () => {
+      alert('Error reading file.');
+      setBulkFile(null);
+    };
+
+    reader.readAsText(bulkFile);
+  };
+
+  if (showKeyInput) {
     // Clear the file input visually (if possible, depends on browser/React handling)
     const fileInput = document.getElementById('bulk-mcq-file') as HTMLInputElement;
     if (fileInput) {
